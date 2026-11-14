@@ -1,0 +1,25 @@
+# Never commit credentials, tokens or local state.
+client_secret*.json
+token.json
+last_package.txt
+last_app.json
+last_item.json
+last_addon.json
+credentials.json
+config.json
+api_key
+usage.jsonl
+AuthKey_*.p8
+.env
+.env.*
+
+# `go build` output inside a server dir
+/mcp-*/mcp-*
+
+# mcp-gemini default output dir
+generated/
+
+# Local tool state
+.cloudflare/
+.delta/
+.DS_Store
