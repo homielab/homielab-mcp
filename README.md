@@ -121,7 +121,8 @@ Add a service:
 4. Add it to the list in `cmd/mcp-homielab/main.go`.
 
 Release: push a tag `vX.Y.Z`; GitHub Actions runs GoReleaser and attaches binaries for macOS,
-Linux and Windows (amd64, arm64).
+Linux and Windows (amd64, arm64). Publishing the release lists every service in the
+[MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.homielab/<service>`.
 
 ## Contributing
 

@@ -1,0 +1,74 @@
+# Lists each service in the official MCP Registry (registry.modelcontextprotocol.io) as
+# io.github.homielab/<service>. Listing only: no package, users install with install.sh.
+name: MCP Registry
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # GitHub OIDC login to the registry
+      contents: read
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write server.json files
+        run: |
+          set -eu
+          version="$(git describe --tags --abbrev=0)"
+          version="${version#v}"
+          repo="https://github.com/homielab/homielab-mcp"
+          mkdir -p registry
+          while IFS='|' read -r id title desc; do
+            jq -n --arg id "$id" --arg title "$title" --arg desc "$desc" --arg v "$version" --arg repo "$repo" '{
+              "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+              name: ("io.github.homielab/" + $id),
+              title: $title,
+              description: $desc,
+              version: $v,
+              websiteUrl: ($repo + "/blob/main/services/" + $id + "/README.md"),
+              repository: {url: $repo, source: "github", id: "1457505506", subfolder: ("services/" + $id)}
+            }' > "registry/${id}.json"
+          done <<'EOF'
+          adsense|AdSense|Read AdSense reports: earnings by site, page, ad unit and country, presets, CSV export
+          admob|AdMob|Read AdMob apps, ad units, network and mediation reports, period comparison, CSV export
+          searchconsole|Search Console|Search Console analytics, period comparison, sitemaps and URL inspection
+          googleplay|Google Play|Google Play Console: tracks, staged rollout, AAB upload, listings, IAP, reviews
+          appstoreconnect|App Store Connect|App Store Connect: TestFlight, versions, review submission, reviews, sales reports
+          blogger|Blogger|Blogger posts and pages: create, edit, schedule, publish; comment moderation
+          chromewebstore|Chrome Web Store|Chrome Web Store: upload, publish with % rollout, rollback, status, reviews
+          firefoxaddons|Firefox Add-ons|Firefox Add-ons (AMO): listing, upload and validation, submit, rollback, ratings
+          gemini|Gemini media|Generate images, speech, music and video with the Gemini API, with a spend log
+          EOF
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Download and verify mcp-publisher
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl -fsSL -o "$archive" "$base_url/$archive"
+          curl -fsSL -o "$archive.sigstore.json" "$base_url/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+          rm "$archive" "$archive.sigstore.json"
+
+      - name: Publish
+        run: |
+          set -eu
+          ./mcp-publisher login github-oidc
+          for f in registry/*.json; do ./mcp-publisher publish "$f"; done
