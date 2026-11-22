@@ -1,6 +1,6 @@
 // Package googleauth implements the OAuth 2.0 installed-app flow (RFC 8252,
-// loopback + PKCE) shared by every server in the collection: credential
-// discovery, a 0600 token store under <user config dir>/<server>/, a
+// loopback + PKCE) shared by every Google service: credential discovery, a
+// 0600 token store under <config dir>/<service>/, a
 // background login manager for MCP tools, and an authenticated *http.Client.
 package googleauth
 
@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+
+	"github.com/homielab/homielab-mcp/internal/appdir"
 )
 
 const (
@@ -30,10 +32,10 @@ const (
 	TokenURL = "https://oauth2.googleapis.com/token"
 )
 
-// Collection lists the config dir names of every server in this repo. Each
-// server probes all of them for client_secret*.json (its own first), so one
-// downloaded secret file serves the whole collection.
-var Collection = []string{"mcp-adsense", "mcp-searchconsole", "mcp-androidpublisher", "mcp-admob", "mcp-blogger", "mcp-chromewebstore"}
+// Collection lists the Google services. Each one probes its own dir, the
+// shared config dir, then the others' dirs for client_secret*.json, so one
+// downloaded secret file serves all of them.
+var Collection = []string{"adsense", "searchconsole", "googleplay", "admob", "blogger", "chromewebstore"}
 
 // ErrNoToken is wrapped by every "no stored token" error.
 var ErrNoToken = errors.New("not authenticated")
@@ -42,14 +44,14 @@ const loginTimeout = 5 * time.Minute
 
 // Provider describes one server's OAuth identity.
 type Provider struct {
-	Name       string // binary and config dir name, e.g. "mcp-adsense"
+	Name       string // service id and config subdir, e.g. "adsense"
 	Title      string // human name, e.g. "AdSense"
 	Scope      string // OAuth scope
 	EnvPrefix  string // env prefix, e.g. "ADSENSE_MCP" → ADSENSE_MCP_CLIENT_ID
 	ToolPrefix string // MCP tool prefix, e.g. "adsense" → adsense_login
 	APIName    string // API to enable in Google Cloud Console
 	Account    string // which Google account to sign in with, for hints
-	BaseDir    string // overrides os.UserConfigDir (tests); empty = real dir
+	BaseDir    string // overrides appdir.Base (tests); empty = real dir
 
 	mu      sync.Mutex
 	running bool
@@ -92,7 +94,7 @@ func (p *Provider) Config() (*oauth2.Config, error) {
 	return nil, fmt.Errorf("no OAuth client credentials found.\n"+
 		"Set %[1]s_CLIENT_ID and %[1]s_CLIENT_SECRET, or download a "+
 		"\"Desktop app\" client secret JSON from Google Cloud Console and place it at %[2]s\n"+
-		"(a client_secret*.json in the config dir of any other server in this collection also works)", p.EnvPrefix, where)
+		"(a client_secret*.json in %[3]s, shared by every Google service, also works)", p.EnvPrefix, where, p.base())
 }
 
 type clientSecrets struct {
@@ -115,15 +117,15 @@ func (p *Provider) newConfig(id, secret string) *oauth2.Config {
 }
 
 // secretCandidates lists client secret files in lookup order:
-// $<PREFIX>_CLIENT_SECRET_FILE, ./client_secret.json, this server's config
-// dir, then the config dirs of the rest of the collection.
+// $<PREFIX>_CLIENT_SECRET_FILE, ./client_secret.json, this service's config
+// dir, the shared config dir, then the other Google services' dirs.
 func (p *Provider) secretCandidates() []string {
 	var paths []string
 	if f := p.env("CLIENT_SECRET_FILE"); f != "" {
 		paths = append(paths, f)
 	}
 	paths = append(paths, "client_secret.json")
-	dirs := []string{p.Name}
+	dirs := []string{p.Name, ""}
 	for _, n := range Collection {
 		if n != p.Name {
 			dirs = append(dirs, n)
@@ -144,12 +146,9 @@ func (p *Provider) CredentialSources() string {
 	fmt.Fprintf(&b, "  - %[1]s_CLIENT_ID + %[1]s_CLIENT_SECRET environment variables\n", p.EnvPrefix)
 	fmt.Fprintf(&b, "  - $%s_CLIENT_SECRET_FILE\n", p.EnvPrefix)
 	b.WriteString("  - ./client_secret.json\n")
-	fmt.Fprintf(&b, "  - <user config dir>/%s/client_secret*.json\n", p.Name)
-	for _, n := range Collection {
-		if n != p.Name {
-			fmt.Fprintf(&b, "  - <user config dir>/%s/client_secret*.json  (shared secret)\n", n)
-		}
-	}
+	fmt.Fprintf(&b, "  - %s/client_secret*.json\n", filepath.Join(p.base(), p.Name))
+	fmt.Fprintf(&b, "  - %s/client_secret*.json  (shared by every Google service)\n", p.base())
+	b.WriteString("  - the other Google services' config dirs\n")
 	return b.String()
 }
 
@@ -157,14 +156,22 @@ func (p *Provider) dir(name string) (string, error) {
 	base := p.BaseDir
 	if base == "" {
 		var err error
-		if base, err = os.UserConfigDir(); err != nil {
+		if base, err = appdir.Base(); err != nil {
 			return "", err
 		}
 	}
 	return filepath.Join(base, name), nil
 }
 
-// ConfigDir returns <user config dir>/<Name>.
+// base returns the shared config dir for messages.
+func (p *Provider) base() string {
+	if d, err := p.dir(""); err == nil {
+		return d
+	}
+	return "<user config dir>/" + appdir.Name
+}
+
+// ConfigDir returns <config dir>/<Name>.
 func (p *Provider) ConfigDir() (string, error) { return p.dir(p.Name) }
 
 // TokenPath returns the token file location.
@@ -361,8 +368,8 @@ func (p *Provider) SetupHint(err error) error {
 	}
 	return fmt.Errorf("%w\n\nSetup summary:\n"+
 		"1. In Google Cloud Console: enable the %q and create an OAuth Client ID of type \"Desktop app\".\n"+
-		"2. Put client_id/client_secret in %s_CLIENT_ID / %s_CLIENT_SECRET, or the downloaded JSON in the config dir of any server in this collection.\n"+
-		"3. Call the %s_login tool and approve access with %s.", err, p.APIName, p.EnvPrefix, p.EnvPrefix, p.ToolPrefix, p.Account)
+		"2. Put the downloaded JSON in %s (shared by every Google service), or set %s_CLIENT_ID / %s_CLIENT_SECRET.\n"+
+		"3. Call the %s_login tool and approve access with %s.", err, p.APIName, p.base(), p.EnvPrefix, p.EnvPrefix, p.ToolPrefix, p.Account)
 }
 
 // ---- background login ----

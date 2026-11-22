@@ -13,10 +13,12 @@ AuthKey_*.p8
 .env
 .env.*
 
-# `go build` output inside a server dir
-/mcp-*/mcp-*
+# Build output
+/mcp-homielab
+/cmd/mcp-homielab/mcp-homielab
+/dist/
 
-# mcp-gemini default output dir
+# gemini default output dir
 generated/
 
 # Local tool state

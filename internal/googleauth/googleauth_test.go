@@ -18,7 +18,7 @@ func testProvider(t *testing.T) *Provider {
 	t.Setenv("TEST_MCP_CLIENT_SECRET", "")
 	t.Chdir(t.TempDir()) // no stray ./client_secret.json
 	return &Provider{
-		Name:       "mcp-adsense",
+		Name:       "adsense",
 		Title:      "Test",
 		Scope:      "scope-x",
 		EnvPrefix:  "TEST_MCP",
@@ -105,7 +105,7 @@ func TestConfigFromSharedSecret(t *testing.T) {
 	if _, err := p.Config(); err == nil {
 		t.Fatal("no credentials anywhere should fail")
 	}
-	dir := filepath.Join(p.BaseDir, "mcp-androidpublisher")
+	dir := filepath.Join(p.BaseDir, "googleplay")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -167,5 +167,21 @@ func TestRenderStatus(t *testing.T) {
 	out = p.RenderStatus(Status{CredsConfigured: true}, "")
 	if !strings.Contains(out, "Next: call test_login") {
 		t.Errorf("next-step hint missing:\n%s", out)
+	}
+}
+
+// A secret in the shared config dir serves every Google service.
+func TestConfigFromBaseDirSecret(t *testing.T) {
+	p := testProvider(t)
+	secret := `{"installed":{"client_id":"base-id","client_secret":"base-secret"}}`
+	if err := os.WriteFile(filepath.Join(p.BaseDir, "client_secret_y.json"), []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := p.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ClientID != "base-id" {
+		t.Errorf("ClientID = %q, want base-id", cfg.ClientID)
 	}
 }

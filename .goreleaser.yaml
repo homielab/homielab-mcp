@@ -1,0 +1,37 @@
+# Release: push a tag (git tag v0.1.0 && git push origin v0.1.0); the release
+# workflow runs goreleaser and attaches the archives to the GitHub release.
+version: 2
+
+project_name: mcp-homielab
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/mcp-homielab
+    binary: mcp-homielab
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]

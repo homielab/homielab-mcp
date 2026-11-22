@@ -1,27 +1,26 @@
-// Package mcpkit holds the MCP plumbing shared by every server: the
-// command-line entry point (serve / login / logout), the *_login tools, and
-// tool result helpers.
+// Package mcpkit holds the MCP plumbing shared by every service: the
+// command-line entry point (serve / login / logout / add), the *_login tools,
+// and tool result helpers.
 package mcpkit
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/homielab/homielab-mcp/internal/appdir"
 	"github.com/homielab/homielab-mcp/internal/googleauth"
 )
 
-// Server describes one MCP server binary.
+// Server describes one service: an MCP server run as "mcp-homielab <ID>".
 type Server struct {
 	// Auth is the Google OAuth provider; it adds the login and logout
-	// commands. Nil for servers with their own credentials.
+	// commands. Nil for services with their own credentials.
 	Auth         *googleauth.Provider
-	Name         string // binary name; empty = Auth.Name
-	Version      string
+	ID           string // service id, e.g. "adsense"; empty = Auth.Name
 	Summary      string // one line for --help, e.g. "MCP server for the Google AdSense Management API (read-only)"
 	Instructions string // MCP server instructions sent to the client
 	// Credentials describes the credential lookup for --help when Auth is nil.
@@ -38,71 +37,77 @@ type Command struct {
 	Run   func(ctx context.Context, args []string) error
 }
 
-// Main dispatches os.Args: no argument, "serve" or "run" serves MCP on stdio;
-// with Auth, "login" and "logout" manage the OAuth token; Commands add more.
-func Main(s Server) {
-	name := s.Name
-	if name == "" {
-		name = s.Auth.Name
+func (s Server) id() string {
+	if s.ID != "" {
+		return s.ID
 	}
-	s.Name = name
-	log.SetPrefix(name + ": ")
-	log.SetFlags(log.LstdFlags)
+	return s.Auth.Name
+}
 
-	cmds := s.Commands
+// commands returns login/logout (with Auth) followed by s.Commands.
+func (s Server) commands() []Command {
+	if s.Auth == nil {
+		return s.Commands
+	}
+	return append([]Command{
+		{Name: "login", Usage: "authorize with Google in the default browser", Run: func(ctx context.Context, _ []string) error {
+			return login(ctx, s.Auth)
+		}},
+		{Name: "logout", Usage: "delete the stored OAuth token", Run: func(ctx context.Context, _ []string) error {
+			if err := s.Auth.ClearToken(); err != nil {
+				return err
+			}
+			fmt.Println("Token deleted.")
+			return nil
+		}},
+	}, s.Commands...)
+}
+
+func (s Server) usage(version string) string {
+	id := s.id()
+	prog := appdir.Name + " " + id
+	width := len(prog) + 10
+	var lines strings.Builder
+	fmt.Fprintf(&lines, "  %-*s run the MCP server on stdio\n", width, prog)
+	for _, c := range s.commands() {
+		fmt.Fprintf(&lines, "  %-*s %s\n", width, prog+" "+c.Name, c.Usage)
+	}
 	credentials := s.Credentials
 	if s.Auth != nil {
-		cmds = append([]Command{
-			{Name: "login", Usage: "authorize with Google in the default browser", Run: func(ctx context.Context, _ []string) error {
-				return login(ctx, s.Auth)
-			}},
-			{Name: "logout", Usage: "delete the stored OAuth token", Run: func(ctx context.Context, _ []string) error {
-				if err := s.Auth.ClearToken(); err != nil {
-					return err
-				}
-				fmt.Println("Token deleted.")
-				return nil
-			}},
-		}, cmds...)
 		credentials = s.Auth.CredentialSources()
 	}
+	return fmt.Sprintf("%s %s — %s\n\nUsage:\n%s\nCredential sources (tried in order):\n%s", prog, version, s.Summary, lines.String(), credentials)
+}
 
-	var lines strings.Builder
-	fmt.Fprintf(&lines, "  %-*s run the MCP server on stdio (default)\n", len(name)+10, name)
-	for _, c := range cmds {
-		fmt.Fprintf(&lines, "  %-*s %s\n", len(name)+10, name+" "+c.Name, c.Usage)
-	}
-	usage := fmt.Sprintf("%s %s — %s\n\nUsage:\n%s\nCredential sources (tried in order):\n%s", name, s.Version, s.Summary, lines.String(), credentials)
-
-	ctx := context.Background()
+// run dispatches the arguments after the service id: none, "serve" or "run"
+// serves MCP on stdio; otherwise a command or --help.
+func (s Server) run(ctx context.Context, version string, args []string) error {
 	cmd := ""
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+	if len(args) > 0 {
+		cmd = args[0]
 	}
 	switch cmd {
 	case "", "serve", "run":
-		if err := s.serve(ctx); err != nil {
-			log.Fatalf("server exited: %v", err)
-		}
-		return
+		return s.serve(ctx, version)
 	case "-h", "--help", "help":
-		fmt.Print(usage)
-		return
+		fmt.Print(s.usage(version))
+		return nil
 	}
-	for _, c := range cmds {
+	for _, c := range s.commands() {
 		if c.Name == cmd {
-			if err := c.Run(ctx, os.Args[2:]); err != nil {
-				log.Fatalf("%s: %v", cmd, err)
+			if err := c.Run(ctx, args[1:]); err != nil {
+				return fmt.Errorf("%s: %w", cmd, err)
 			}
-			return
+			return nil
 		}
 	}
-	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usage)
+	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, s.usage(version))
 	os.Exit(2)
+	return nil
 }
 
-func (s Server) serve(ctx context.Context) error {
-	server := mcp.NewServer(&mcp.Implementation{Name: s.Name, Version: s.Version}, &mcp.ServerOptions{
+func (s Server) serve(ctx context.Context, version string) error {
+	server := mcp.NewServer(&mcp.Implementation{Name: appdir.Name + "-" + s.id(), Version: version}, &mcp.ServerOptions{
 		Instructions: s.Instructions,
 		SetCacheable: func(ctx context.Context, req mcp.Request, c *mcp.Cacheable) {
 			// Static capability/list results: safe to cache for 5 minutes
