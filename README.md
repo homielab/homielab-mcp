@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/homielab/homielab-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/homielab/homielab-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![homielab/homielab-mcp MCP server](https://glama.ai/mcp/servers/homielab/homielab-mcp/badges/score.svg)](https://glama.ai/mcp/servers/homielab/homielab-mcp)
 
 [Model Context Protocol](https://modelcontextprotocol.io) servers for people who build and ship
 apps, browser extensions and websites. Let Claude, Cursor or any MCP client read your AdSense,
